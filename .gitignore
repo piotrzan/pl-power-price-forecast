@@ -1,0 +1,4 @@
+data/pse_hourly.csv
+reports/forecasts_*.csv
+__pycache__/
+.pytest_cache/

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Prognoza cen energii RDN i wartość magazynu energii</title>
+<style>
+  @page { size: A4; margin: 15mm 16mm 14mm 16mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Inter", sans-serif; font-size: 9.4pt; line-height: 1.42; color: #1f2a33; margin: 0; }
+  h1 { font-size: 17pt; line-height: 1.2; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: #56636d; font-size: 9.2pt; margin-bottom: 12px; }
+  h2 { break-after: avoid; font-size: 11pt; color: #2459d6; margin: 16px 0 6px; padding-bottom: 3px; border-bottom: 1px solid #d5dde3; }
+  p { margin: 0 0 7px; }
+  ul { margin: 0 0 7px; padding-left: 16px; }
+  li { margin-bottom: 3px; }
+  .key { background: #eef3fb; border-left: 3px solid #2459d6; padding: 9px 12px; margin: 4px 0 6px; }
+  .key ul { margin: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 4px 0 8px; font-size: 9pt; font-variant-numeric: tabular-nums; }
+  th, td { padding: 4px 6px; border-bottom: 1px solid #e3e8ec; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: #56636d; font-weight: 600; border-bottom: 1px solid #b9c4cc; }
+  tr.best td { font-weight: 600; }
+  figure { margin: 6px 0 10px; break-inside: avoid; }
+  figure img { width: 100%; display: block; }
+  figcaption { font-size: 8.4pt; color: #56636d; margin-top: 3px; }
+  .two { display: flex; gap: 12px; }
+  .two figure { flex: 1; min-width: 0; }
+  .note { font-size: 8.4pt; color: #56636d; }
+  .pb { break-before: page; }
+  .foot { margin-top: 12px; font-size: 8.4pt; color: #56636d; border-top: 1px solid #d5dde3; padding-top: 6px; }
+</style>
+</head>
+<body>
+
+<h1>Prognoza cen energii na polskim rynku dnia następnego i&nbsp;wartość magazynu energii</h1>
+<div class="sub">Piotr Żandarski · listopad 2026 · dane: API PSE, 14.06.2024 – 1.11.2026 <br>Kod i&nbsp;pełny opis: github.com/piotrzan/pl-power-price-forecast · piotrzan.github.io · piotrzandarski314@gmail.com</div>
+
+<div class="key">
+  <ul>
+    <li>Gradient boosting ma błąd o&nbsp;35% mniejszy niż prosta reguła „podobny dzień”: 86 zamiast 132 PLN/MWh przy średniej cenie 501 PLN/MWh (test na 489 dniach).</li>
+    <li>Najbardziej na cenę wpływa zapotrzebowanie pomniejszone o&nbsp;produkcję z&nbsp;wiatru i&nbsp;fotowoltaiki.</li>
+    <li>Magazyn 1&nbsp;MW / 2&nbsp;MWh planowany według modelu zarabia około 45&nbsp;tys. PLN rocznie więcej niż planowany według prostej reguły.</li>
+    <li>Jeśli model zna tylko dane na pewno dostępne przed 12:00, błąd rośnie do około 100 PLN/MWh. Dużo zależy więc od prognozy wiatru i&nbsp;słońca na jutro.</li>
+  </ul>
+</div>
+
+<h2>1. Cel</h2>
+<p>Firma handlująca energią albo właściciel magazynu musi złożyć oferty na rynek dnia następnego do 12:00 dnia przed dostawą. Potrzebuje do tego prognozy ceny na każdą godzinę jutra. Sprawdzam, o&nbsp;ile można poprawić prognozę względem prostych reguł, co najbardziej wpływa na cenę i&nbsp;ile pieniędzy daje lepsza prognoza.</p>
+
+<h2>2. Dane</h2>
+<p>Dane pobrałem z&nbsp;publicznego API PSE (<i>api.raporty.pse.pl</i>) własnym skryptem w&nbsp;Pythonie:</p>
+<table>
+  <tr><th>Raport PSE</th><th style="text-align:left">Co zawiera</th></tr>
+  <tr><td>csdac-pln</td><td style="text-align:left">cena dla Polski z&nbsp;aukcji dnia następnego, PLN/MWh</td></tr>
+  <tr><td>pdgopkd</td><td style="text-align:left">plan PSE na następną dobę: zapotrzebowanie, wiatr, fotowoltaika, MW</td></tr>
+  <tr><td>his-wlk-cal</td><td style="text-align:left">rzeczywiste zapotrzebowanie, wiatr i&nbsp;fotowoltaika, MW</td></tr>
+</table>
+<p>Wartości co 15 minut uśredniłem do godzin i&nbsp;przeliczyłem na czas polski. Okres: 14.06.2024 – 1.11.2026, razem 20&nbsp;902 godziny, bez braków.</p>
+<p>Fotowoltaika mocno obniża ceny w&nbsp;środku dnia, a&nbsp;godzin z&nbsp;ujemną ceną jest coraz więcej: 146 w&nbsp;drugiej połowie 2024, 310 w&nbsp;2025 i&nbsp;316 w&nbsp;2026 (do 1 listopada).</p>
+<figure style="width:46%">
+  <img src="figures/price_profile.png" alt="">
+  <figcaption>Rys. 1. Średnia cena w&nbsp;ciągu doby. Najtaniej jest w&nbsp;południe, najdrożej o&nbsp;19:00–20:00.</figcaption>
+</figure>
+
+<h2>3. Metoda</h2>
+<ul>
+  <li>Prognoza na dany dzień powstaje rano dzień wcześniej. Model korzysta z&nbsp;cen z&nbsp;poprzednich dni, planu PSE i&nbsp;kalendarza (godzina, dzień tygodnia, święta, pora roku).</li>
+  <li>Punkt odniesienia to dwie proste reguły: cena sprzed tygodnia oraz „podobny dzień” (w&nbsp;poniedziałek i&nbsp;weekend cena sprzed tygodnia, w&nbsp;pozostałe dni wczorajsza).</li>
+  <li>Regresja liniowa: osobny model dla każdej godziny (Ridge).</li>
+  <li>Gradient boosting: jeden model dla wszystkich godzin, który dobrze radzi sobie z&nbsp;zależnościami nieliniowymi.</li>
+  <li>Test wygląda jak praca na żywo: model uczy się na danych sprzed 1.07.2025, a&nbsp;co 28 dni uczy się od nowa z&nbsp;nowymi danymi. Żadna prognoza nie korzysta z&nbsp;danych z&nbsp;przyszłości.</li>
+  <li>Różnicę między modelami sprawdzam testem Diebolda-Mariano, żeby wiedzieć, czy nie jest przypadkowa.</li>
+  <li>Przedział 80% wyznaczam z&nbsp;błędów modelu z&nbsp;ostatnich 56 dni.</li>
+  <li>Nie wiem dokładnie, o&nbsp;której PSE publikuje plan na następny dzień. Dlatego liczę też wariant, w&nbsp;którym model zna tylko plan na dzień bieżący, na pewno dostępny przed 12:00.</li>
+</ul>
+
+<h2>4. Wyniki</h2>
+<table>
+  <tr><th>Model</th><th>MAE [PLN/MWh]</th><th>RMSE [PLN/MWh]</th><th>vs. „podobny dzień”</th><th>MAE, dane sprzed 12:00</th></tr>
+  <tr><td>Cena sprzed tygodnia</td><td>152,0</td><td>240,6</td><td>+15%</td><td>152,0</td></tr>
+  <tr><td>Reguła „podobny dzień”</td><td>132,0</td><td>211,9</td><td>–</td><td>132,0</td></tr>
+  <tr><td>Regresja liniowa</td><td>92,0</td><td>143,3</td><td>−30%</td><td>99,5</td></tr>
+  <tr class="best"><td>Gradient boosting</td><td>86,3</td><td>132,4</td><td>−35%</td><td>101,8</td></tr>
+</table>
+<p class="note">MAE to średni błąd bezwzględny, RMSE mocniej karze duże pomyłki. Okres testu: 1.07.2025 – 1.11.2026, 489 dni.</p>
+<ul>
+  <li>Z&nbsp;pełnym planem PSE gradient boosting jest statystycznie lepszy od regresji (p&nbsp;&lt;&nbsp;0,001). Z&nbsp;danymi tylko sprzed 12:00 oba modele wypadają podobnie (p&nbsp;=&nbsp;0,10).</li>
+  <li>Regresja kwantylowa dawała za wąski przedział: obejmował 61% cen zamiast 80%. Przedział wyznaczony z&nbsp;ostatnich błędów obejmuje 74%.</li>
+</ul>
+<div class="two">
+  <figure>
+    <img src="figures/mae_by_model.png" alt="">
+    <figcaption>Rys. 2. Średni błąd prognozy w&nbsp;obu wariantach.</figcaption>
+  </figure>
+  <figure>
+    <img src="figures/importance.png" alt="">
+    <figcaption>Rys. 3. O&nbsp;ile rośnie błąd po losowym wymieszaniu danej zmiennej (2026).</figcaption>
+  </figure>
+</div>
+<p>Model myli się najbardziej wieczorem o&nbsp;19:00–20:00 (około 135 PLN/MWh, w&nbsp;nocy około 50), bo wtedy zdarzają się skoki cen powyżej 2000 PLN/MWh. Drugi problem to nagła zmiana poziomu cen: w&nbsp;październiku 2026 średnia cena wzrosła do 740 PLN/MWh, a&nbsp;model zaniżał ją średnio o&nbsp;117 PLN/MWh.</p>
+<figure style="width:76%">
+  <img src="figures/example_forecast.png" alt="">
+  <figcaption>Rys. 4. Prognoza i&nbsp;przedział 80% na tle cen rzeczywistych, ostatnie dwa tygodnie testu.</figcaption>
+</figure>
+
+<h2>5. Wartość prognozy dla magazynu energii</h2>
+<p>Dla magazynu 1&nbsp;MW / 2&nbsp;MWh co dzień liczę najlepszy plan ładowania i&nbsp;rozładowania (programowanie liniowe) na podstawie prognozy, a&nbsp;zysk rozliczam po rzeczywistych cenach. Założenia: sprawność 88%, koszt zużycia baterii 20 PLN/MWh, magazyn pusty na koniec dnia.</p>
+<table>
+  <tr><th>Plan według</th><th>Zysk [PLN/dzień]</th><th>% maksimum</th></tr>
+  <tr><td>Rzeczywistych cen (maksimum)</td><td>1&nbsp;242</td><td>100%</td></tr>
+  <tr class="best"><td>Gradient boosting</td><td>1&nbsp;132</td><td>91%</td></tr>
+  <tr><td>Regresji liniowej</td><td>1&nbsp;119</td><td>90%</td></tr>
+  <tr><td>Reguły „podobny dzień”</td><td>1&nbsp;009</td><td>81%</td></tr>
+  <tr><td>Ceny sprzed tygodnia</td><td>977</td><td>79%</td></tr>
+</table>
+<p>Różnica między modelem a&nbsp;regułą „podobny dzień” to 123 PLN dziennie, czyli około 45&nbsp;tys. PLN rocznie na 1&nbsp;MW. Najwięcej da się zarobić wiosną i&nbsp;latem, gdy różnica między ceną w&nbsp;południe i&nbsp;wieczorem jest największa.</p>
+<figure style="width:80%">
+  <img src="figures/battery.png" alt="">
+  <figcaption>Rys. 5. Po lewej część maksymalnego zysku dla każdego modelu, po prawej maksymalny możliwy zysk w&nbsp;kolejnych miesiącach.</figcaption>
+</figure>
+
+<h2>6. Ograniczenia</h2>
+<ul>
+  <li>Nie wiem dokładnie, o&nbsp;której PSE publikuje plan na następny dzień. W&nbsp;praktyce lepiej byłoby użyć porannego planu 5-dniowego (PK5L) albo własnej prognozy pogody.</li>
+  <li>Model nie zna cen paliw, uprawnień CO2 ani wymiany z&nbsp;sąsiednimi krajami. Mogłyby pomóc przy nagłych zmianach poziomu cen.</li>
+  <li>Wycena magazynu pomija rynek bilansujący i&nbsp;usługi dla PSE oraz zakłada, że magazyn nie wpływa na ceny.</li>
+  <li>Od 1.10.2025 ceny są kwadransowe. Następnym krokiem byłaby prognoza co 15 minut.</li>
+</ul>
+</body>
+</html>
